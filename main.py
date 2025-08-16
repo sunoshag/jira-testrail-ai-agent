@@ -50,7 +50,7 @@ def testrail_get_sections(project_id=TESTRAIL_PROJECT_ID, suite_id=TESTRAIL_SUIT
     url = f"{TESTRAIL_BASE}/index.php?/api/v2/get_sections/{project_id}&suite_id={suite_id}"
     r = requests.get(url, auth=testrail_auth, timeout=20)
     r.raise_for_status()
-    return r.json()
+    return r.json()  # contains keys like offset, size, sections
 
 def testrail_add_section(project_id, name, suite_id, parent_id=None, description=None):
     url = f"{TESTRAIL_BASE}/index.php?/api/v2/add_section/{project_id}"
@@ -68,19 +68,24 @@ def testrail_add_case(section_id, case_payload):
     return r.json()
 
 def find_section_by_name(project_id, suite_id, name):
-    all_sections = testrail_get_sections(project_id, suite_id)
+    response = testrail_get_sections(project_id, suite_id)
+    all_sections = response.get("sections", [])
     print("all sections:", all_sections)
-    
-    if not isinstance(all_sections, list):
-        print("Warning: expected a list of sections, got:", type(all_sections))
-        return None
 
     for s in all_sections:
         if isinstance(s, dict) and s.get("name") == name:
             return s
 
-    # No section found with the given name
     return None
+
+# --- TestRail helpers (extended) ---
+def testrail_get_cases(project_id, suite_id, section_id=None):
+    url = f"{TESTRAIL_BASE}/index.php?/api/v2/get_cases/{project_id}&suite_id={suite_id}"
+    if section_id:
+        url += f"&section_id={section_id}"
+    r = requests.get(url, auth=testrail_auth, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 # --- AC parser ---
 def extract_acceptance_criteria(issue):
@@ -123,35 +128,42 @@ def process_active_sprint():
     if not sprint:
         print("No active sprint found.")
         return
+
     sprint_id = sprint["id"]
     sprint_name = sprint.get("name", f"Sprint {sprint_id}")
     print(f"Processing active sprint: {sprint_name}")
 
-    issues = jira_get_sprint_issues(sprint_id)
-    # Ensure sprint section exists
+    # ✅ Check if sprint section already exists
     sprint_section = find_section_by_name(TESTRAIL_PROJECT_ID, TESTRAIL_SUITE_ID, sprint_name)
+    print("Section.........:",sprint_section)
     if sprint_section:
-        sprint_section_id = sprint_section["id"]
-    else:
-        sprint_section_id = testrail_add_section(TESTRAIL_PROJECT_ID, sprint_name, TESTRAIL_SUITE_ID,
-                                                description=f"Auto-created for Jira sprint {sprint_id}")["id"]
+        print(f"⚡ Sprint section '{sprint_name}' already exists in TestRail. Exiting...")
+        return  # <--- stop everything here
 
+    # Otherwise, create the sprint section
+    sprint_section_id = testrail_add_section(
+        TESTRAIL_PROJECT_ID,
+        sprint_name,
+        TESTRAIL_SUITE_ID,
+        description=f"Auto-created for Jira sprint {sprint_id}"
+    )["id"]
+    print(f"🆕 Created sprint section: {sprint_name}")
+
+    # Process issues only if sprint section was just created
+    issues = jira_get_sprint_issues(sprint_id)
     for issue in issues:
         key = issue.get("key")
         summary = issue.get("fields", {}).get("summary", "")
         issue_section_name = f"{key} - {summary}"
-        child_section = None
-        for s in testrail_get_sections(TESTRAIL_PROJECT_ID, TESTRAIL_SUITE_ID):
-            if isinstance(s, dict) and s.get("parent_id") == sprint_section_id and s.get("name") == issue_section_name:
-                child_section = s
-            break
 
-        if child_section:
-            issue_section_id = child_section["id"]
-        else:
-            issue_section_id = testrail_add_section(TESTRAIL_PROJECT_ID, issue_section_name,
-                                                    TESTRAIL_SUITE_ID, parent_id=sprint_section_id,
-                                                    description=f"Tests for {key}")["id"]
+        issue_section_id = testrail_add_section(
+            TESTRAIL_PROJECT_ID,
+            issue_section_name,
+            TESTRAIL_SUITE_ID,
+            parent_id=sprint_section_id,
+            description=f"Tests for {key}"
+        )["id"]
+        print(f"   🆕 Created section for {key}")
 
         # Create test cases from AC
         ac_list = extract_acceptance_criteria(issue)
@@ -169,16 +181,8 @@ def process_active_sprint():
             if expected:
                 payload_case["custom_expected"] = expected
             testrail_add_case(issue_section_id, payload_case)
-
-# --- Optional webhook route (unchanged) ---
-@app.post("/webhook/jira")
-async def handle_jira_webhook(request: Request, x_hook_secret: str | None = Header(None)):
-    if WEBHOOK_SECRET and x_hook_secret != WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Bad webhook secret")
-    payload = await request.json()
-    return {"message": "Webhook received (optional)", "payload": payload}
+            print(f"      🆕 Created case: {key} - AC {idx}")
 
 # --- Startup: automatically process active sprint ---
 if __name__ == "__main__":
     process_active_sprint()  # <--- runs immediately on script start
-    uvicorn.run(app, host="0.0.0.0", port=8081)
