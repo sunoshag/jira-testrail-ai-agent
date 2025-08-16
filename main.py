@@ -35,15 +35,14 @@ def process_active_sprint():
     issues = jira_get_sprint_issues(sprint_id)
     for issue in issues:
         key = issue.get("key")
-        summary = issue.get("fields", {}).get("summary", "")
-        issue_section_name = f"{key} - {summary}"
-
+        issue_section_name = issue.get("fields", {}).get("summary", "")
+        
         issue_section_id = testrail_add_section(
             TESTRAIL_PROJECT_ID,
             issue_section_name,
             TESTRAIL_SUITE_ID,
             parent_id=sprint_section_id,
-            description=f"Tests for {key}"
+            description=f"Tests for {issue_section_name}"
         )["id"]
         print(f"   🆕 Created section for {key}")
 
@@ -52,14 +51,15 @@ def process_active_sprint():
         for idx, ac in enumerate(ac_list, start=1):
             steps, expected = ac_to_steps_and_expected(ac)
             payload_case = {
-                "title": f"{key} - AC {idx}: {ac[:80]}",
+                "title": f"Test case {idx}: {ac[:80]}",
                 "template_id": 2,
                 "type_id": 1,
                 "priority_id": 2,
                 "refs": key,
-                "custom_preconds": issue.get("fields", {}).get("description", "")[:2000],
+                "custom_preconds": (issue.get("fields", {}).get("description") or "")[:2000],
                 "custom_steps_separated": steps,
-            }
+                "custom_expected":"Expected result goes here"
+        }
             if expected:
                 payload_case["custom_expected"] = expected
             testrail_add_case(issue_section_id, payload_case)
