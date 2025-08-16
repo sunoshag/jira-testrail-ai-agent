@@ -5,6 +5,9 @@ from requests.auth import HTTPBasicAuth
 from fastapi import FastAPI, Request, Header, HTTPException
 import uvicorn
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
@@ -66,9 +69,17 @@ def testrail_add_case(section_id, case_payload):
 
 def find_section_by_name(project_id, suite_id, name):
     all_sections = testrail_get_sections(project_id, suite_id)
+    print("all sections:", all_sections)
+    
+    if not isinstance(all_sections, list):
+        print("Warning: expected a list of sections, got:", type(all_sections))
+        return None
+
     for s in all_sections:
-        if s.get("name") == name:
+        if isinstance(s, dict) and s.get("name") == name:
             return s
+
+    # No section found with the given name
     return None
 
 # --- AC parser ---
@@ -131,9 +142,10 @@ def process_active_sprint():
         issue_section_name = f"{key} - {summary}"
         child_section = None
         for s in testrail_get_sections(TESTRAIL_PROJECT_ID, TESTRAIL_SUITE_ID):
-            if s.get("parent_id") == sprint_section_id and s.get("name") == issue_section_name:
+            if isinstance(s, dict) and s.get("parent_id") == sprint_section_id and s.get("name") == issue_section_name:
                 child_section = s
-                break
+            break
+
         if child_section:
             issue_section_id = child_section["id"]
         else:
