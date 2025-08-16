@@ -1,10 +1,9 @@
 from config import     TESTRAIL_PROJECT_ID, TESTRAIL_SUITE_ID, JIRA_BOARD_ID
-
 from testrail_helpers import testrail_add_section, testrail_add_case, find_section_by_name
-
 from jira_helpers import jira_get_active_sprint, jira_get_sprint_issues
-
 from ac_parser import extract_acceptance_criteria, ac_to_steps_and_expected
+from ai_generator import generate_test_case_from_jira
+
 
 def process_active_sprint():
     sprint = jira_get_active_sprint(JIRA_BOARD_ID)
@@ -46,24 +45,21 @@ def process_active_sprint():
         )["id"]
         print(f"   🆕 Created section for {key}")
 
-        # Create test cases from AC
-        ac_list = extract_acceptance_criteria(issue)
-        for idx, ac in enumerate(ac_list, start=1):
-            steps, expected = ac_to_steps_and_expected(ac)
+        # 🔹 Call AI to generate test cases
+        ai_test_cases = generate_test_case_from_jira(issue)
+
+        for tc in ai_test_cases:
             payload_case = {
-                "title": f"Test case {idx}: {ac[:80]}",
+                "title": f"{key} - {tc['title']}",
                 "template_id": 2,
                 "type_id": 1,
                 "priority_id": 2,
                 "refs": key,
-                "custom_preconds": (issue.get("fields", {}).get("description") or "")[:2000],
-                "custom_steps_separated": steps,
-                "custom_expected":"Expected result goes here"
-        }
-            if expected:
-                payload_case["custom_expected"] = expected
+                "custom_steps_separated": [{"content": step, "expected": ""} for step in tc["steps"]],
+                "custom_expected": tc["expected_result"]
+            }
             testrail_add_case(issue_section_id, payload_case)
-            print(f"      🆕 Created case: {key} - AC {idx}")
+            print(f"      🆕 Created AI-generated case: {key} - {tc['title']}")
 
 # --- Startup: automatically process active sprint ---
 if __name__ == "__main__":
